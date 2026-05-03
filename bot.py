@@ -33,7 +33,7 @@ PROVIDER_DEFAULTS = {
     "anthropic": "claude-sonnet-4-20250514",
     "openai": "gpt-4o",
     "deepseek": "deepseek-chat",
-    "gemini": "gemini-2.0-flash",
+    "gemini": "gemini-2.5-flash",
 }
 
 
@@ -54,6 +54,7 @@ sent_suppressions: set = set()
 ended_conversations: set = set()
 
 http_client: Optional[httpx.AsyncClient] = None
+_llm_semaphore = asyncio.Semaphore(5)
 
 
 @app.on_event("startup")
@@ -77,21 +78,30 @@ async def llm_complete(prompt: str, system: str = None, max_tokens: int = 600) -
         return ""
 
     model = get_model()
-    try:
-        if LLM_PROVIDER == "groq":
-            return await _groq(prompt, system, model, max_tokens)
-        elif LLM_PROVIDER == "anthropic":
-            return await _anthropic(prompt, system, model, max_tokens)
-        elif LLM_PROVIDER == "openai":
-            return await _openai(prompt, system, model, max_tokens)
-        elif LLM_PROVIDER == "deepseek":
-            return await _deepseek(prompt, system, model, max_tokens)
-        elif LLM_PROVIDER == "gemini":
-            return await _gemini(prompt, system, model, max_tokens)
+    providers = {
+        "groq": _groq, "anthropic": _anthropic, "openai": _openai,
+        "deepseek": _deepseek, "gemini": _gemini,
+    }
+    fn = providers.get(LLM_PROVIDER)
+    if not fn:
         return ""
-    except Exception as e:
-        print(f"[LLM ERROR] {e}")
-        return ""
+
+    async with _llm_semaphore:
+        for attempt in range(4):
+            try:
+                return await fn(prompt, system, model, max_tokens)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < 3:
+                    wait = (2 ** attempt) + 0.5
+                    print(f"[LLM] 429 rate limit, retry {attempt+1} in {wait:.1f}s")
+                    await asyncio.sleep(wait)
+                    continue
+                print(f"[LLM ERROR] HTTP {e.response.status_code}: {e}")
+                return ""
+            except Exception as e:
+                print(f"[LLM ERROR] {e}")
+                return ""
+    return ""
 
 
 async def _groq(prompt, system, model, max_tokens):
@@ -151,7 +161,12 @@ async def _gemini(prompt, system, model, max_tokens):
               "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens}},
         headers={"Content-Type": "application/json"})
     resp.raise_for_status()
-    return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+    data = resp.json()
+    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    for part in parts:
+        if "text" in part:
+            return part["text"]
+    return ""
 
 
 # ============================================================
