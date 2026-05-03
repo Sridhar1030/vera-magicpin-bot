@@ -6,7 +6,7 @@ services:
     startCommand: uvicorn bot:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: LLM_PROVIDER
-        value: anthropic
+        value: groq
       - key: LLM_API_KEY
         sync: false
       - key: PYTHON_VERSION
