@@ -72,7 +72,7 @@ async def shutdown():
 # LLM CLIENT
 # ============================================================
 
-async def llm_complete(prompt: str, system: str = None, max_tokens: int = 800) -> str:
+async def llm_complete(prompt: str, system: str = None, max_tokens: int = 600) -> str:
     if not LLM_API_KEY:
         return ""
 
@@ -101,7 +101,7 @@ async def _groq(prompt, system, model, max_tokens):
     messages.append({"role": "user", "content": prompt})
     resp = await http_client.post(
         "https://api.groq.com/openai/v1/chat/completions",
-        json={"model": model, "messages": messages, "temperature": 0.3, "max_tokens": max_tokens},
+        json={"model": model, "messages": messages, "temperature": 0.2, "max_tokens": max_tokens},
         headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
     )
     resp.raise_for_status()
@@ -109,23 +109,12 @@ async def _groq(prompt, system, model, max_tokens):
 
 
 async def _anthropic(prompt, system, model, max_tokens):
-    body = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    }
+    body = {"model": model, "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
     if system:
         body["system"] = system
-    resp = await http_client.post(
-        "https://api.anthropic.com/v1/messages",
-        json=body,
-        headers={
-            "x-api-key": LLM_API_KEY,
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-        },
-    )
+    resp = await http_client.post("https://api.anthropic.com/v1/messages", json=body,
+        headers={"x-api-key": LLM_API_KEY, "Content-Type": "application/json", "anthropic-version": "2023-06-01"})
     resp.raise_for_status()
     return resp.json()["content"][0]["text"]
 
@@ -135,11 +124,9 @@ async def _openai(prompt, system, model, max_tokens):
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    resp = await http_client.post(
-        "https://api.openai.com/v1/chat/completions",
-        json={"model": model, "messages": messages, "temperature": 0.3, "max_tokens": max_tokens},
-        headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
-    )
+    resp = await http_client.post("https://api.openai.com/v1/chat/completions",
+        json={"model": model, "messages": messages, "temperature": 0.2, "max_tokens": max_tokens},
+        headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"})
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"]
 
@@ -149,11 +136,9 @@ async def _deepseek(prompt, system, model, max_tokens):
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    resp = await http_client.post(
-        "https://api.deepseek.com/v1/chat/completions",
-        json={"model": model, "messages": messages, "temperature": 0.3, "max_tokens": max_tokens},
-        headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
-    )
+    resp = await http_client.post("https://api.deepseek.com/v1/chat/completions",
+        json={"model": model, "messages": messages, "temperature": 0.2, "max_tokens": max_tokens},
+        headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"})
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"]
 
@@ -162,12 +147,9 @@ async def _gemini(prompt, system, model, max_tokens):
     full = f"{system}\n\n{prompt}" if system else prompt
     resp = await http_client.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={LLM_API_KEY}",
-        json={
-            "contents": [{"parts": [{"text": full}]}],
-            "generationConfig": {"temperature": 0.3, "maxOutputTokens": max_tokens},
-        },
-        headers={"Content-Type": "application/json"},
-    )
+        json={"contents": [{"parts": [{"text": full}]}],
+              "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens}},
+        headers={"Content-Type": "application/json"})
     resp.raise_for_status()
     return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -176,65 +158,60 @@ async def _gemini(prompt, system, model, max_tokens):
 # PROMPT TEMPLATES
 # ============================================================
 
-COMPOSER_SYSTEM = """You are Vera, magicpin's AI merchant engagement assistant on WhatsApp. You compose messages that make Indian merchants WANT to reply.
+COMPOSER_SYSTEM = """You are Vera, magicpin's merchant WhatsApp assistant. You compose SHORT, data-grounded messages.
 
-SCORING DIMENSIONS — your message is judged on each (0-10):
+HARD RULES:
+1. MAX 4-5 lines. WhatsApp messages. Not emails.
+2. EVERY claim must come from the context below. If a number, name, date, or fact is not in the context, DO NOT USE IT.
+3. NO URLs. Never include any URL or link — this causes a hard penalty.
+4. NO taboo words from the category voice profile.
+5. ONE CTA at the end. Not two. Not zero (unless pure info).
+6. send_as="vera" for merchant-facing (trigger scope=merchant). send_as="merchant_on_behalf" ONLY when trigger scope=customer AND customer is present.
 
-1. SPECIFICITY: Anchor on VERIFIABLE facts from the context. Include exact numbers, dates, percentages, source citations. "2,100-patient trial showed 38% reduction — JIDA Oct 2026 p.14" scores 10. "Improve your profile" scores 2.
+VOICE BY CATEGORY:
+- dentists: peer-clinical. Use "Dr. {name}". Technical terms OK. Cite journal+page for research. No "cure"/"guaranteed".
+- salons: warm-practical. First name. Friendly. Emojis sparingly.
+- restaurants: fellow-operator. Use "covers"/"footfall"/"AOV". Sharp, no fluff.
+- gyms: coach-to-member. Energetic. No body-shame. No "guaranteed results".
+- pharmacies: trustworthy-precise. Molecule names, batch numbers. No "miracle cure".
 
-2. CATEGORY FIT: Match the voice EXACTLY:
-   - Dentists: peer-clinical, technical terms welcome (fluoride varnish, caries, OPG), use "Dr. {name}", cite journal+page
-   - Salons: warm-practical, approachable-expert, friendly emoji OK, use first name
-   - Restaurants: fellow-operator, use industry terms (covers, footfall, AOV), practical-sharp
-   - Gyms: coach-to-member, energetic-disciplined, no body-shame, no "guaranteed results"
-   - Pharmacies: trustworthy-precise, neighbourhood-pharmacist, molecule names, batch numbers
+TRIGGER-SPECIFIC SHAPES:
+- research_digest/regulation_change: Lead with source+finding. Cite journal, page, trial size. End with "Want me to pull it?"
+- perf_dip/perf_spike/seasonal_perf_dip: Lead with the exact metric change. Compare to peer. Recommend specific action.
+- recall_due/chronic_refill_due: Customer name, due date, specific slots/prices from context. Send as merchant.
+- supply_alert: Batch numbers, molecule, affected customer count. Urgency framing.
+- ipl_match_today/festival_upcoming: Match/event details, data-backed recommendation (not just "run a promo").
+- active_planning_intent: Merchant asked for something — deliver a DRAFT artifact, not more questions.
+- milestone_reached: Specific number, what it means, one next step.
+- customer_lapsed_hard: No shame. New offering that matches their past focus. Low-commitment CTA.
+- curious_ask_due: Ask ONE specific question. Offer to turn the answer into something useful.
+- competitor_opened: Name, distance, their offer. Frame as awareness, not alarm.
+- winback_eligible/dormant_with_vera: Acknowledge the gap. Lead with value, not guilt.
+- review_theme_emerged: Quote the theme, count, suggest specific action.
 
-3. MERCHANT FIT: Personalize to THIS merchant — owner first name, THEIR numbers (views, CTR, offers), their language preference. If languages include "hi", use natural Hindi-English code-mix.
+COMPULSION LEVERS (use 1-2 per message):
+- Specificity: verifiable number from context
+- Loss aversion: "you're missing X"
+- Effort externalization: "I've drafted X — just say go"
+- Curiosity: "want to see?"
+- Social proof: "X peers in your area did Y"
+- Single binary CTA: Reply YES
 
-4. TRIGGER RELEVANCE: Clearly communicate WHY NOW — name the specific event/data that triggered this message. Not a generic nudge.
-
-5. ENGAGEMENT COMPULSION: Use these levers:
-   - Specificity: concrete verifiable fact from context
-   - Loss aversion: "you're missing X" / "before this window closes"
-   - Social proof: "X peers in your locality did Y"
-   - Effort externalization: "I've drafted X — just say go" / "live in 5 min"
-   - Curiosity: "want to see?" / "want the full list?"
-   - Reciprocity: "I noticed Y about your account, thought you'd want to know"
-   - Single binary CTA: Reply YES — that's it
-
-SEND_AS RULES (critical — get this right):
-- send_as="vera" → You ARE Vera talking TO the merchant. Use for ALL merchant-facing messages (trigger scope="merchant").
-- send_as="merchant_on_behalf" → You speak AS the merchant TO their customer. ONLY when trigger scope="customer" and a customer is present.
-
-MESSAGE RULES:
-- 3-6 lines max for WhatsApp readability
-- Hindi-English code-mix for Hindi-speaking merchants (natural, not forced)
-- Source citations for research/compliance triggers (journal name, page, year)
-- Single CTA at end of message
-- NEVER fabricate data not in context
-- NEVER use category taboo words
-- Use service+price offers ("Dental Cleaning @ ₹299") not generic discounts ("30% off")
-- No long preambles. No "I hope you're doing well"
-- Add JUDGMENT: interpret data and give actionable recommendations, don't just template-fill
-- End with a clear, single CTA — the action you want them to take
-
-OUTPUT: Respond with ONLY a JSON object, no markdown fences:
-{"body": "message text", "cta": "open_ended|binary_yes_no|binary_confirm_cancel|none", "send_as": "vera|merchant_on_behalf", "rationale": "2-3 sentences: why this message, compulsion levers used, context data anchors"}"""
+OUTPUT: ONLY a JSON object. No markdown. No explanation.
+{"body": "message text", "cta": "open_ended|binary_yes_no|binary_confirm_cancel|none", "send_as": "vera|merchant_on_behalf", "rationale": "1-2 sentences: which context fields anchor this message, which compulsion lever"}"""
 
 
-REPLY_SYSTEM = """You are Vera, magicpin's AI merchant assistant, continuing a conversation on WhatsApp.
+REPLY_SYSTEM = """You are Vera, continuing a WhatsApp conversation with a merchant. Keep replies SHORT (2-3 lines).
 
-RULES FOR REPLYING:
-1. If merchant COMMITS ("let's do it", "yes", "go ahead", "ok what's next") → Switch to ACTION mode immediately. Give concrete next steps with deliverables and timelines. NEVER ask another qualifying question.
-2. If merchant asks OFF-TOPIC question → Politely decline in one line, redirect to original topic.
-3. If merchant asks a FOLLOW-UP question about the topic → Answer with specific data from context.
-4. If merchant gives FEEDBACK or INFORMATION → Acknowledge and use it to refine the action.
-5. Match merchant's language (if they write Hindi, reply in Hindi-English mix).
-6. Keep replies short (2-4 lines).
-7. Reference specific data from context, not generic platitudes.
+RULES:
+1. Merchant COMMITS ("let's do it", "yes", "go ahead") → ACTION mode. Concrete deliverable + timeline. NEVER another question.
+2. Off-topic question → Politely decline in one line, redirect to original topic.
+3. Follow-up question → Answer with SPECIFIC data from context. No vague platitudes.
+4. NEVER fabricate data. If the context doesn't have the answer, say you'll check and follow up.
+5. Match the merchant's language (Hindi reply → Hindi-English mix response).
 
-OUTPUT: JSON only, no markdown:
-{"action": "send|wait|end", "body": "reply text (if send)", "cta": "open_ended|binary_yes_no|none (if send)", "wait_seconds": N (if wait), "rationale": "why this response"}"""
+OUTPUT: JSON only.
+{"action": "send|wait|end", "body": "text (if send)", "cta": "open_ended|binary_yes_no|none (if send)", "wait_seconds": N (if wait), "rationale": "why"}"""
 
 
 # ============================================================
@@ -262,39 +239,22 @@ def format_signals(merchant: Dict) -> str:
     return ", ".join(merchant.get("signals", [])) or "none"
 
 
-def format_conversation_history(merchant: Dict) -> str:
-    history = merchant.get("conversation_history", [])
-    if not history:
-        return "No prior conversation"
-    lines = []
-    for turn in history[-3:]:
-        lines.append(f"[{turn.get('from', '?')}]: {turn.get('body', '')[:120]}")
-    return "\n".join(lines)
-
-
 def format_review_themes(merchant: Dict) -> str:
     themes = merchant.get("review_themes", [])
     if not themes:
         return "None"
-    parts = []
-    for t in themes:
-        parts.append(f"{t.get('theme', '?')} ({t.get('sentiment', '?')}, {t.get('occurrences_30d', 0)}x/30d)")
-    return ", ".join(parts)
+    return "; ".join(
+        f"{t['theme']}({t.get('sentiment','?')}, {t.get('occurrences_30d',0)}x)" +
+        (f" \"{t['common_quote']}\"" if t.get("common_quote") else "")
+        for t in themes
+    )
 
 
-def language_instruction(merchant: Dict) -> str:
+def lang_hint(merchant: Dict) -> str:
     langs = merchant.get("identity", {}).get("languages", ["en"])
     if "hi" in langs:
-        return "Use natural Hindi-English code-mix (merchant speaks Hindi)."
-    if "te" in langs:
-        return "Merchant speaks Telugu — use English with Telugu transliterations where natural."
-    if "mr" in langs:
-        return "Merchant speaks Marathi — use English with Hindi/Marathi mix where natural."
-    if "kn" in langs:
-        return "Merchant speaks Kannada — use English primarily."
-    if "ta" in langs:
-        return "Merchant speaks Tamil — use English primarily with Tamil salutations."
-    return "Use English."
+        return "LANGUAGE: Use natural Hindi-English code-mix."
+    return "LANGUAGE: Use English."
 
 
 # ============================================================
@@ -302,7 +262,6 @@ def language_instruction(merchant: Dict) -> str:
 # ============================================================
 
 def build_composition_prompt(category: Dict, merchant: Dict, trigger: Dict, customer: Dict = None) -> str:
-    cat_slug = category.get("slug", "unknown")
     voice = category.get("voice", {})
     peer = category.get("peer_stats", {})
     identity = merchant.get("identity", {})
@@ -313,94 +272,75 @@ def build_composition_prompt(category: Dict, merchant: Dict, trigger: Dict, cust
 
     top_item_id = trigger_payload.get("top_item_id")
     digest_item = find_digest_item(category, top_item_id) if top_item_id else None
-    all_digest = "\n".join(
-        f"  - [{d.get('kind', '?')}] {d.get('title', '?')} (Source: {d.get('source', '?')})"
-        + (f"\n    Summary: {d.get('summary', '')}" if d.get("summary") else "")
-        + (f"\n    Actionable: {d.get('actionable', '')}" if d.get("actionable") else "")
-        for d in category.get("digest", [])
-    )
-    seasonal = "\n".join(
-        f"  - {s.get('month_range', '?')}: {s.get('note', '')}"
-        for s in category.get("seasonal_beats", [])
-    )
-    offers_catalog = "\n".join(
-        f"  - {o.get('title', '?')} ({o.get('type', '?')})"
-        for o in category.get("offer_catalog", [])[:6]
-    )
 
-    prompt = f"""=== COMPOSE A MESSAGE ===
+    digest_text = ""
+    for d in category.get("digest", []):
+        line = f"  [{d.get('kind')}] {d.get('title')} — {d.get('source', 'no source')}"
+        if d.get("summary"):
+            line += f"\n    {d['summary']}"
+        if d.get("trial_n"):
+            line += f" (n={d['trial_n']})"
+        digest_text += line + "\n"
 
-CATEGORY: {cat_slug}
-Voice: {voice.get('tone', '?')}, {voice.get('register', '?')}
-Taboo words: {voice.get('vocab_taboo', [])}
-Peer stats: avg_rating={peer.get('avg_rating', '?')}, avg_ctr={peer.get('avg_ctr', '?')}, avg_views_30d={peer.get('avg_views_30d', '?')}, avg_reviews={peer.get('avg_review_count', '?')}
-Category offer catalog:
-{offers_catalog}
-Digest items:
-{all_digest}
-Seasonal notes:
-{seasonal}
+    seasonal_text = "\n".join(f"  {s['month_range']}: {s['note']}" for s in category.get("seasonal_beats", []))
 
----
+    conv_history = ""
+    for turn in merchant.get("conversation_history", [])[-3:]:
+        conv_history += f"  [{turn.get('from')}] {turn.get('body', '')[:150]}\n"
 
-MERCHANT: {identity.get('name', '?')} ({identity.get('locality', '?')}, {identity.get('city', '?')})
-Owner: {identity.get('owner_first_name', '?')}
-Languages: {identity.get('languages', [])}
-Established: {identity.get('established_year', '?')}
-Verified: {identity.get('verified', False)}
-Subscription: {merchant.get('subscription', {}).get('status', '?')} ({merchant.get('subscription', {}).get('plan', '?')}, {merchant.get('subscription', {}).get('days_remaining', '?')}d left)
-Performance (30d): views={perf.get('views', '?')}, calls={perf.get('calls', '?')}, directions={perf.get('directions', '?')}, CTR={perf.get('ctr', '?')} (peer avg CTR: {peer.get('avg_ctr', '?')})
-7-day delta: views {delta.get('views_pct', 0):+.0%}, calls {delta.get('calls_pct', 0):+.0%}
+    prompt = f"""CATEGORY: {category.get('slug')}
+Voice: {voice.get('tone')}, {voice.get('register', '')}
+Taboo: {voice.get('vocab_taboo', [])}
+Peer benchmarks: rating={peer.get('avg_rating')}, CTR={peer.get('avg_ctr')}, views/30d={peer.get('avg_views_30d')}, reviews={peer.get('avg_review_count')}
+Digest:
+{digest_text}Seasonal: {seasonal_text}
+
+MERCHANT: {identity.get('name')} ({identity.get('locality')}, {identity.get('city')})
+Owner first name: {identity.get('owner_first_name')}
+Languages: {identity.get('languages')}
+Verified: {identity.get('verified')}
+Subscription: {merchant.get('subscription', {}).get('status')} / {merchant.get('subscription', {}).get('plan')} / {merchant.get('subscription', {}).get('days_remaining', '?')}d left
+Perf 30d: views={perf.get('views')}, calls={perf.get('calls')}, directions={perf.get('directions')}, CTR={perf.get('ctr')}
+7d delta: views={delta.get('views_pct', 0):+.0%}, calls={delta.get('calls_pct', 0):+.0%}
 Active offers: {format_active_offers(merchant)}
 Signals: {format_signals(merchant)}
-Customer data: {json.dumps(cust_agg)}
-Review themes: {format_review_themes(merchant)}
-Recent conversation:
-{format_conversation_history(merchant)}
+Customers: {json.dumps(cust_agg)}
+Reviews: {format_review_themes(merchant)}
+Recent conv:
+{conv_history or '  (none)'}
 
----
-
-TRIGGER: {trigger.get('kind', '?')} (urgency {trigger.get('urgency', '?')}/5, {trigger.get('source', '?')})
-Scope: {trigger.get('scope', '?')}
-Merchant: {trigger.get('merchant_id', '?')}
-Customer: {trigger.get('customer_id') or 'none (merchant-facing)'}
-Payload: {json.dumps(trigger_payload, default=str)}
-Suppression: {trigger.get('suppression_key', '')}
-"""
+TRIGGER: kind={trigger.get('kind')} | urgency={trigger.get('urgency')}/5 | scope={trigger.get('scope')} | source={trigger.get('source')}
+Payload: {json.dumps(trigger_payload, default=str)}"""
 
     if digest_item:
         prompt += f"""
-Relevant digest item (referenced by trigger):
-  Title: {digest_item.get('title', '')}
-  Source: {digest_item.get('source', '')}
+
+REFERENCED DIGEST ITEM:
+  Title: {digest_item.get('title')}
+  Source: {digest_item.get('source')}
   Summary: {digest_item.get('summary', '')}
   Trial N: {digest_item.get('trial_n', 'N/A')}
   Patient segment: {digest_item.get('patient_segment', 'N/A')}
-  Actionable: {digest_item.get('actionable', '')}
-"""
+  Actionable: {digest_item.get('actionable', '')}"""
 
     if customer:
-        cust_id = customer.get("identity", {})
-        cust_rel = customer.get("relationship", {})
-        cust_pref = customer.get("preferences", {})
+        ci = customer.get("identity", {})
+        cr = customer.get("relationship", {})
+        cp = customer.get("preferences", {})
         prompt += f"""
----
 
-CUSTOMER: {cust_id.get('name', '?')}
-Language: {cust_id.get('language_pref', 'en')}
-Age band: {cust_id.get('age_band', '?')}
-State: {customer.get('state', '?')}
-Relationship: {cust_rel.get('visits_total', 0)} visits, first on {cust_rel.get('first_visit', '?')}, last on {cust_rel.get('last_visit', '?')}
-Services: {cust_rel.get('services_received', [])}
-Preferences: {json.dumps(cust_pref)}
-Consent scope: {customer.get('consent', {}).get('scope', [])}
-"""
+CUSTOMER: {ci.get('name')}
+Language: {ci.get('language_pref')}
+Age: {ci.get('age_band', '?')}
+State: {customer.get('state')}
+Visits: {cr.get('visits_total', 0)}, last={cr.get('last_visit')}, services={cr.get('services_received', [])}
+Prefs: {json.dumps(cp)}
+Consent: {customer.get('consent', {}).get('scope', [])}"""
 
     prompt += f"""
----
 
-{language_instruction(merchant)}
-Compose the message now. Use ONLY data from the context above. JSON only."""
+{lang_hint(merchant)}
+Compose now. Use ONLY the data above. JSON only."""
     return prompt
 
 
@@ -409,53 +349,86 @@ def build_reply_prompt(conv: Dict, message: str, turn: int) -> str:
     merchant = get_context("merchant", merchant_id) or {}
     trigger_id = conv.get("trigger_id", "")
     trigger = get_context("trigger", trigger_id) or {}
-    category_slug = conv.get("category_slug", "") or merchant.get("category_slug", "")
-    category = get_context("category", category_slug) or {}
+    cat_slug = conv.get("category_slug", "") or merchant.get("category_slug", "")
+    category = get_context("category", cat_slug) or {}
 
     identity = merchant.get("identity", {})
-    history_lines = []
-    for t in conv.get("turns", []):
-        history_lines.append(f"[Turn {t.get('turn', '?')}] {t.get('from', '?')}: {t.get('body', '')[:200]}")
+    perf = merchant.get("performance", {})
+    voice = category.get("voice", {})
 
-    prompt = f"""=== REPLY TO MERCHANT ===
+    history = "\n".join(
+        f"  [{t.get('from')}]: {t.get('body', '')[:200]}" for t in conv.get("turns", [])
+    )
 
-CONVERSATION SO FAR:
-{chr(10).join(history_lines)}
+    return f"""CONVERSATION:
+{history}
 
-MERCHANT JUST SAID (turn {turn}): "{message}"
+MERCHANT NOW (turn {turn}): "{message}"
 
 CONTEXT:
-Merchant: {identity.get('name', '?')} ({identity.get('locality', '?')}, {identity.get('city', '?')})
-Owner: {identity.get('owner_first_name', '?')}
+Merchant: {identity.get('name')} ({identity.get('locality')}, {identity.get('city')})
+Owner: {identity.get('owner_first_name')}
 Languages: {identity.get('languages', [])}
-Category: {category.get('slug', '?')} ({category.get('voice', {}).get('tone', '?')} voice)
-Active offers: {format_active_offers(merchant)}
-Original trigger: {trigger.get('kind', '?')}
-Trigger payload: {json.dumps(trigger.get('payload', {}), default=str)[:300]}
+Category: {cat_slug} ({voice.get('tone', '?')} voice)
+Perf: views={perf.get('views')}, calls={perf.get('calls')}, CTR={perf.get('ctr')}
+Offers: {format_active_offers(merchant)}
+Signals: {format_signals(merchant)}
+Customers: {json.dumps(merchant.get('customer_aggregate', {}))}
+Trigger: {trigger.get('kind', '?')}
+Trigger payload: {json.dumps(trigger.get('payload', {}), default=str)[:400]}
 
-{language_instruction(merchant)}
-Compose the reply. JSON only."""
-    return prompt
+{lang_hint(merchant)}
+JSON only."""
 
+
+# ============================================================
+# POST-COMPOSITION VALIDATION
+# ============================================================
+
+def validate_and_fix(result: Dict, category: Dict, trigger: Dict) -> Dict:
+    body = result.get("body", "")
+
+    taboos = category.get("voice", {}).get("vocab_taboo", [])
+    for taboo in taboos:
+        if taboo.lower() in body.lower():
+            body = body.replace(taboo, "***")
+            body = body.replace(taboo.lower(), "***")
+
+    url_pattern = re.compile(r'https?://\S+', re.IGNORECASE)
+    body = url_pattern.sub('', body).strip()
+
+    if not body:
+        return None
+
+    result["body"] = body
+    return result
+
+
+# ============================================================
+# COMPOSITION + FALLBACK
+# ============================================================
 
 async def compose_message(category: Dict, merchant: Dict, trigger: Dict, customer: Dict = None) -> Optional[Dict]:
     prompt = build_composition_prompt(category, merchant, trigger, customer)
-    response = await llm_complete(prompt, COMPOSER_SYSTEM, max_tokens=600)
-    if not response:
-        return build_fallback_composition(category, merchant, trigger, customer)
-    return parse_json_response(response) or build_fallback_composition(category, merchant, trigger, customer)
+    response = await llm_complete(prompt, COMPOSER_SYSTEM, max_tokens=500)
+
+    result = parse_json_response(response) if response else None
+    if result and result.get("body"):
+        validated = validate_and_fix(result, category, trigger)
+        if validated:
+            return validated
+
+    return build_fallback(category, merchant, trigger, customer)
 
 
 async def compose_reply_llm(conv: Dict, message: str, turn: int) -> Optional[Dict]:
     prompt = build_reply_prompt(conv, message, turn)
-    response = await llm_complete(prompt, REPLY_SYSTEM, max_tokens=400)
-    if not response:
-        return None
-    return parse_json_response(response)
+    response = await llm_complete(prompt, REPLY_SYSTEM, max_tokens=350)
+    return parse_json_response(response) if response else None
 
 
 def parse_json_response(text: str) -> Optional[Dict]:
-    match = re.search(r'\{[\s\S]*\}', text)
+    match = re.search(r'\{[\s\S]*?\}', text)
     if not match:
         return None
     try:
@@ -465,32 +438,80 @@ def parse_json_response(text: str) -> Optional[Dict]:
 
 
 # ============================================================
-# FALLBACK COMPOSITION (no LLM)
+# TRIGGER-SPECIFIC FALLBACK (grounded, no LLM)
 # ============================================================
 
-def build_fallback_composition(category: Dict, merchant: Dict, trigger: Dict, customer: Dict = None) -> Dict:
+def build_fallback(category: Dict, merchant: Dict, trigger: Dict, customer: Dict = None) -> Dict:
     identity = merchant.get("identity", {})
-    name = identity.get("owner_first_name", identity.get("name", "there"))
-    kind = trigger.get("kind", "update")
+    owner = identity.get("owner_first_name", "")
+    name = identity.get("name", "")
     perf = merchant.get("performance", {})
-    cat_slug = category.get("slug", "business")
+    kind = trigger.get("kind", "")
+    payload = trigger.get("payload", {})
+    offers = [o["title"] for o in merchant.get("offers", []) if o.get("status") == "active"]
+    peer_ctr = category.get("peer_stats", {}).get("avg_ctr", 0)
+    cust_agg = merchant.get("customer_aggregate", {})
 
     is_customer = trigger.get("scope") == "customer" and customer
     if is_customer:
         cust_name = customer.get("identity", {}).get("name", "there")
-        merch_name = identity.get("name", "our team")
-        body = f"Hi {cust_name}, {merch_name} here. We have an update for you — reply YES if you'd like details."
-        return {"body": body, "cta": "binary_yes_no", "send_as": "merchant_on_behalf",
-                "rationale": f"Fallback customer message for {kind} trigger"}
+        return {
+            "body": f"Hi {cust_name}, {name} se bol rahe hain. Aapke liye ek update hai — details ke liye YES reply karein.",
+            "cta": "binary_yes_no", "send_as": "merchant_on_behalf",
+            "rationale": f"Fallback customer-facing for {kind}; grounded in merchant name + customer name"
+        }
 
-    views = perf.get("views", 0)
+    if kind == "research_digest":
+        digest = category.get("digest", [{}])[0]
+        body = f"Dr. {owner}, {digest.get('source', 'new research')} mein ek update aaya hai: {digest.get('title', 'relevant finding')}. Want me to pull the summary?"
+        return {"body": body, "cta": "binary_yes_no", "send_as": "vera",
+                "rationale": f"Fallback research_digest; grounded in digest[0].title and source"}
+
+    if kind in ("perf_dip", "seasonal_perf_dip"):
+        metric = payload.get("metric", "views")
+        delta = payload.get("delta_pct", perf.get("delta_7d", {}).get("views_pct", 0))
+        body = f"{owner}, your {metric} dropped {abs(delta):.0%} this week."
+        if payload.get("is_expected_seasonal"):
+            body += " This is the normal seasonal dip — peers see the same."
+        body += " Want me to suggest what to focus on instead?"
+        return {"body": body, "cta": "binary_yes_no", "send_as": "vera",
+                "rationale": f"Fallback perf_dip; grounded in payload.delta_pct={delta}"}
+
+    if kind == "supply_alert":
+        molecule = payload.get("molecule", "medication")
+        batches = payload.get("affected_batches", [])
+        body = f"{owner}, urgent: voluntary recall on {molecule} batches {', '.join(batches[:2])}. Check your shelf — I can help notify affected customers."
+        return {"body": body, "cta": "binary_yes_no", "send_as": "vera",
+                "rationale": f"Fallback supply_alert; grounded in payload.molecule and affected_batches"}
+
+    if kind == "ipl_match_today":
+        match = payload.get("match", "IPL match")
+        is_wknd = not payload.get("is_weeknight", True)
+        body = f"{owner}, {match} aaj hai."
+        if is_wknd:
+            body += " Saturday matches usually drop covers 12% — skip the in-store promo, push delivery instead."
+        else:
+            body += " Weeknight matches boost covers +18%. Push your match-night combo."
+        if offers:
+            body += f" Your '{offers[0]}' is already active."
+        return {"body": body, "cta": "binary_yes_no", "send_as": "vera",
+                "rationale": f"Fallback ipl_match; grounded in payload.match, is_weeknight, category digest data"}
+
+    if kind == "competitor_opened":
+        comp = payload.get("competitor_name", "a new competitor")
+        dist = payload.get("distance_km", "nearby")
+        body = f"{owner}, {comp} opened {dist}km away. Want me to show how your profile compares?"
+        return {"body": body, "cta": "binary_yes_no", "send_as": "vera",
+                "rationale": f"Fallback competitor_opened; grounded in payload.competitor_name and distance_km"}
+
     ctr = perf.get("ctr", 0)
-    offers = [o["title"] for o in merchant.get("offers", []) if o.get("status") == "active"]
-    offer_text = f" Your '{offers[0]}' offer is active." if offers else ""
-
-    body = f"Hi {name}, quick update: your profile has {views} views this month (CTR {ctr:.1%}).{offer_text} Want me to help optimize? Reply YES."
+    views = perf.get("views", 0)
+    body = f"{owner}, your profile got {views} views this month (CTR {ctr:.1%}, peer avg {peer_ctr:.1%})."
+    if offers:
+        body += f" '{offers[0]}' is live."
+    body += " Want me to suggest how to improve?"
     return {"body": body, "cta": "binary_yes_no", "send_as": "vera",
-            "rationale": f"Fallback composition for {kind} — uses merchant performance data"}
+            "rationale": f"Fallback generic; grounded in perf.views={views}, perf.ctr={ctr}, peer_ctr={peer_ctr}"}
 
 
 # ============================================================
@@ -498,83 +519,51 @@ def build_fallback_composition(category: Dict, merchant: Dict, trigger: Dict, cu
 # ============================================================
 
 AUTO_REPLY_PATTERNS = [
-    r"thank you for contacting",
-    r"thanks for contacting",
-    r"our team will respond",
-    r"we will get back to you",
-    r"your message has been received",
-    r"we have received your",
-    r"we'?ll respond as soon as",
-    r"thank you for reaching out",
-    r"our customer service",
-    r"we appreciate your message",
-    r"please wait while we",
-    r"automated assistant",
-    r"auto[\s-]?reply",
-    r"we are currently unavailable",
-    r"outside.*office hours",
-    r"leave a message",
+    r"thank you for contacting", r"thanks for contacting",
+    r"our team will respond", r"we will get back to you",
+    r"your message has been received", r"we have received your",
+    r"we'?ll respond as soon as", r"thank you for reaching out",
+    r"our customer service", r"we appreciate your message",
+    r"please wait while we", r"automated assistant",
+    r"auto[\s-]?reply", r"we are currently unavailable",
+    r"outside.*office hours", r"leave a message",
     r"our team will get back",
-    r"shukriya.*team tak pahuncha",
-    r"madad ke liye shukriya",
+    r"shukriya.*team tak pahuncha", r"madad ke liye shukriya",
     r"aapki jaankari.*shukriya",
 ]
 
 INTENT_PATTERNS = [
-    r"let'?s\s+do\s+it",
-    r"ok\s+let'?s\s+go",
-    r"go\s+ahead",
-    r"what'?s\s+next",
-    r"sounds?\s+good.*do",
-    r"yes.*proceed",
-    r"yes.*start",
-    r"i'?m\s+in",
-    r"sign\s+me\s+up",
-    r"let'?s\s+start",
-    r"^yes\s*please",
-    r"^yes\s*$",
-    r"^ok\s+do\s+it",
-    r"haan.*karo",
-    r"theek\s+hai.*karo",
-    r"chalega",
-    r"chalo\s+shuru",
-    r"kar\s+do",
-    r"^confirm",
-    r"aage\s+badho",
+    r"let'?s\s+do\s+it", r"ok\s+let'?s\s+go", r"go\s+ahead",
+    r"what'?s\s+next", r"sounds?\s+good.*do",
+    r"yes.*proceed", r"yes.*start", r"i'?m\s+in",
+    r"sign\s+me\s+up", r"let'?s\s+start",
+    r"^yes\s*please", r"^yes\s*$", r"^ok\s+do\s+it",
+    r"haan.*karo", r"theek\s+hai.*karo", r"chalega",
+    r"chalo\s+shuru", r"kar\s+do", r"^confirm", r"aage\s+badho",
 ]
 
 HOSTILE_PATTERNS = [
-    r"stop\s+messaging",
-    r"don'?t.*message\s+me",
-    r"not\s+interested",
-    r"stop\s+sending",
-    r"leave\s+me\s+alone",
-    r"stop\s+bothering",
-    r"don'?t\s+bother",
-    r"unsubscribe",
-    r"\bstop\b.*\bspam\b",
-    r"useless\s+spam",
-    r"band\s+karo",
-    r"mat\s+bhejo",
-    r"pareshan\s+mat\s+karo",
-    r"^stop$",
+    r"stop\s+messaging", r"don'?t.*message\s+me",
+    r"not\s+interested", r"stop\s+sending",
+    r"leave\s+me\s+alone", r"stop\s+bothering",
+    r"don'?t\s+bother", r"unsubscribe",
+    r"\bstop\b.*\bspam\b", r"useless\s+spam",
+    r"band\s+karo", r"mat\s+bhejo",
+    r"pareshan\s+mat\s+karo", r"^stop$",
     r"this\s+is\s+useless",
 ]
 
 
 def is_auto_reply(message: str) -> bool:
-    msg = message.lower().strip()
-    return any(re.search(p, msg, re.IGNORECASE) for p in AUTO_REPLY_PATTERNS)
+    return any(re.search(p, message.lower().strip(), re.IGNORECASE) for p in AUTO_REPLY_PATTERNS)
 
 
 def is_intent_transition(message: str) -> bool:
-    msg = message.lower().strip()
-    return any(re.search(p, msg, re.IGNORECASE) for p in INTENT_PATTERNS)
+    return any(re.search(p, message.lower().strip(), re.IGNORECASE) for p in INTENT_PATTERNS)
 
 
 def is_hostile(message: str) -> bool:
-    msg = message.lower().strip()
-    return any(re.search(p, msg, re.IGNORECASE) for p in HOSTILE_PATTERNS)
+    return any(re.search(p, message.lower().strip(), re.IGNORECASE) for p in HOSTILE_PATTERNS)
 
 
 # ============================================================
@@ -584,14 +573,8 @@ def is_hostile(message: str) -> bool:
 async def handle_reply(conv_id: str, merchant_id: str, message: str, turn: int, customer_id: str = None) -> Dict:
     conv = conversations.get(conv_id)
     if not conv:
-        conv = {
-            "turns": [],
-            "merchant_id": merchant_id,
-            "trigger_id": "",
-            "category_slug": "",
-            "customer_id": customer_id,
-            "auto_reply_count": 0,
-        }
+        conv = {"turns": [], "merchant_id": merchant_id, "trigger_id": "", "category_slug": "",
+                "customer_id": customer_id, "auto_reply_count": 0}
         merchant = get_context("merchant", merchant_id)
         if merchant:
             conv["category_slug"] = merchant.get("category_slug", "")
@@ -599,59 +582,44 @@ async def handle_reply(conv_id: str, merchant_id: str, message: str, turn: int, 
 
     conv["turns"].append({"from": "merchant", "body": message, "turn": turn})
 
-    # 1. Auto-reply detection
+    # 1. Auto-reply
     if is_auto_reply(message):
         conv["auto_reply_count"] = conv.get("auto_reply_count", 0) + 1
         count = conv["auto_reply_count"]
-
         if count >= 3:
             ended_conversations.add(conv_id)
-            return {
-                "action": "end",
-                "rationale": f"Auto-reply detected {count}x consecutively — no human engagement. Closing conversation to avoid wasting turns."
-            }
-        elif count == 2:
-            return {
-                "action": "wait",
-                "wait_seconds": 86400,
-                "rationale": f"Same auto-reply {count}x in a row — owner not at phone. Backing off 24h before retry."
-            }
-        else:
-            merchant = get_context("merchant", merchant_id) or {}
-            owner = merchant.get("identity", {}).get("owner_first_name", "")
-            body = f"Looks like an auto-reply — no worries. When {owner or 'you'} see{'s' if owner else ''} this, just reply YES to continue. I'll hold this for you."
-            conv["turns"].append({"from": "vera", "body": body, "turn": turn})
-            return {
-                "action": "send",
-                "body": body,
-                "cta": "binary_yes_no",
-                "rationale": "Detected canned WhatsApp Business auto-reply. One explicit prompt to flag for the owner, then backing off."
-            }
+            return {"action": "end",
+                    "rationale": f"Auto-reply {count}x — no human engagement. Ending to avoid turn waste."}
+        if count == 2:
+            return {"action": "wait", "wait_seconds": 86400,
+                    "rationale": f"Auto-reply {count}x — owner offline. Backing off 24h."}
+        merchant = get_context("merchant", merchant_id) or {}
+        owner = merchant.get("identity", {}).get("owner_first_name", "")
+        body = f"Looks like an auto-reply. When {owner or 'you'} see{'s' if owner else ''} this, just reply YES to continue."
+        conv["turns"].append({"from": "vera", "body": body, "turn": turn})
+        return {"action": "send", "body": body, "cta": "binary_yes_no",
+                "rationale": "Auto-reply detected. One prompt for the owner, then back off."}
 
     conv["auto_reply_count"] = 0
 
-    # 2. Hostile detection
+    # 2. Hostile
     if is_hostile(message):
         ended_conversations.add(conv_id)
         merchant = get_context("merchant", merchant_id) or {}
         owner = merchant.get("identity", {}).get("owner_first_name", "")
-        body = f"Apologies{' ' + owner if owner else ''} — I won't message again. If anything changes, you can always restart with 'Hi Vera'."
+        body = f"Noted{' ' + owner if owner else ''} — won't message again. Restart anytime with 'Hi Vera'."
         conv["turns"].append({"from": "vera", "body": body, "turn": turn})
-        return {
-            "action": "send",
-            "body": body,
-            "cta": "none",
-            "rationale": "Merchant explicitly not interested. One-line acknowledgment with opt-back-in path, then closing."
-        }
+        return {"action": "send", "body": body, "cta": "none",
+                "rationale": "Merchant not interested. Graceful exit with re-engagement path."}
 
-    # 3. Intent transition detection
+    # 3. Intent transition
     if is_intent_transition(message):
-        result = await _handle_intent_action(conv, merchant_id, message, turn)
+        result = await _compose_action_reply(conv, merchant_id, message, turn)
         if result:
             conv["turns"].append({"from": "vera", "body": result.get("body", ""), "turn": turn})
             return result
 
-    # 4. Normal reply — use LLM
+    # 4. LLM reply
     result = await compose_reply_llm(conv, message, turn)
     if result:
         if result.get("action") == "end":
@@ -661,41 +629,30 @@ async def handle_reply(conv_id: str, merchant_id: str, message: str, turn: int, 
         return result
 
     # 5. Fallback
-    return {
-        "action": "send",
-        "body": "Got it. Let me work on this and get back to you shortly.",
-        "cta": "none",
-        "rationale": "Generic acknowledgment fallback — LLM unavailable."
-    }
+    return {"action": "send",
+            "body": "Got it — working on this now. Will have it for you in a few minutes.",
+            "cta": "none", "rationale": "LLM unavailable; generic acknowledgment."}
 
 
-async def _handle_intent_action(conv: Dict, merchant_id: str, message: str, turn: int) -> Optional[Dict]:
-    merchant = get_context("merchant", merchant_id) or {}
-    identity = merchant.get("identity", {})
-    owner = identity.get("owner_first_name", "")
-    offers = [o["title"] for o in merchant.get("offers", []) if o.get("status") == "active"]
-    trigger_id = conv.get("trigger_id", "")
-    trigger = get_context("trigger", trigger_id) or {}
-    kind = trigger.get("kind", "")
-
+async def _compose_action_reply(conv: Dict, merchant_id: str, message: str, turn: int) -> Optional[Dict]:
     result = await compose_reply_llm(conv, message, turn)
     if result and result.get("action") == "send":
         body = result.get("body", "")
-        qualifying = ["would you", "do you", "can you tell", "what if", "how about"]
-        if not any(q in body.lower() for q in qualifying):
+        requalify = ["would you", "do you think", "can you tell me", "what if", "how about"]
+        if not any(q in body.lower() for q in requalify):
             return result
 
-    body = f"Done{' ' + owner if owner else ''}. I'm drafting this now — you'll have it in 2 minutes."
-    if offers:
-        body += f" I'll tie it to your active '{offers[0]}' offer."
-    body += " Reply CONFIRM when you've reviewed, or tell me what to change."
+    merchant = get_context("merchant", merchant_id) or {}
+    owner = merchant.get("identity", {}).get("owner_first_name", "")
+    offers = [o["title"] for o in merchant.get("offers", []) if o.get("status") == "active"]
 
-    return {
-        "action": "send",
-        "body": body,
-        "cta": "binary_confirm_cancel",
-        "rationale": "Merchant explicitly committed — switching from qualifying to action mode. Concrete deliverable + timeline + confirmation CTA."
-    }
+    body = f"On it{' ' + owner if owner else ''}. Drafting now — you'll have it in 2 minutes."
+    if offers:
+        body += f" Tying it to your '{offers[0]}' offer."
+    body += " Reply CONFIRM when reviewed."
+
+    return {"action": "send", "body": body, "cta": "binary_confirm_cancel",
+            "rationale": "Merchant committed. Switching to action mode — concrete deliverable, no re-qualification."}
 
 
 # ============================================================
@@ -708,11 +665,7 @@ async def healthz():
     for (scope, _) in contexts:
         if scope in counts:
             counts[scope] += 1
-    return {
-        "status": "ok",
-        "uptime_seconds": int(time.time() - START_TIME),
-        "contexts_loaded": counts,
-    }
+    return {"status": "ok", "uptime_seconds": int(time.time() - START_TIME), "contexts_loaded": counts}
 
 
 @app.get("/v1/metadata")
@@ -721,9 +674,9 @@ async def metadata():
         "team_name": "Vera Elite",
         "team_members": ["AI Builder"],
         "model": get_model(),
-        "approach": "LLM composer with category-specific voice routing, trigger-aware prompt engineering, multi-turn state machine with auto-reply detection and intent transition handling",
+        "approach": "4-context LLM composer (category voice + merchant data + trigger payload + customer state) with trigger-kind dispatch, post-validation, multi-turn state machine for auto-reply/intent/hostile handling",
         "contact_email": "vera@magicpin.com",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "submitted_at": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -739,26 +692,18 @@ class ContextBody(BaseModel):
 @app.post("/v1/context")
 async def push_context(body: ContextBody):
     if body.scope not in ("category", "merchant", "customer", "trigger"):
-        return JSONResponse(
-            status_code=400,
-            content={"accepted": False, "reason": "invalid_scope", "details": f"Unknown scope: {body.scope}"},
-        )
+        return JSONResponse(status_code=400,
+            content={"accepted": False, "reason": "invalid_scope", "details": f"Unknown scope: {body.scope}"})
 
     key = (body.scope, body.context_id)
     current = contexts.get(key)
-
     if current and current["version"] >= body.version:
-        return JSONResponse(
-            status_code=200,
-            content={"accepted": False, "reason": "stale_version", "current_version": current["version"]},
-        )
+        return JSONResponse(status_code=200,
+            content={"accepted": False, "reason": "stale_version", "current_version": current["version"]})
 
     contexts[key] = {"version": body.version, "payload": body.payload}
-    return {
-        "accepted": True,
-        "ack_id": f"ack_{body.context_id}_v{body.version}",
-        "stored_at": datetime.utcnow().isoformat() + "Z",
-    }
+    return {"accepted": True, "ack_id": f"ack_{body.context_id}_v{body.version}",
+            "stored_at": datetime.utcnow().isoformat() + "Z"}
 
 
 class TickBody(BaseModel):
@@ -769,96 +714,70 @@ class TickBody(BaseModel):
 @app.post("/v1/tick")
 async def tick(body: TickBody):
     tasks = []
-    for trigger_id in body.available_triggers:
-        trigger_data = get_context("trigger", trigger_id)
-        if not trigger_data:
+    for tid in body.available_triggers:
+        td = get_context("trigger", tid)
+        if not td:
             continue
-
-        suppression_key = trigger_data.get("suppression_key", "")
-        if suppression_key and suppression_key in sent_suppressions:
+        sk = td.get("suppression_key", "")
+        if sk and sk in sent_suppressions:
             continue
-
-        merchant_id = trigger_data.get("merchant_id")
-        if not merchant_id:
+        mid = td.get("merchant_id")
+        if not mid:
             continue
-
-        conv_id = f"conv_{merchant_id}_{trigger_id}"
-        if conv_id in ended_conversations:
+        cid_conv = f"conv_{mid}_{tid}"
+        if cid_conv in ended_conversations:
             continue
-
-        merchant_data = get_context("merchant", merchant_id)
-        if not merchant_data:
+        md = get_context("merchant", mid)
+        if not md:
             continue
-
-        category_slug = merchant_data.get("category_slug", "")
-        category_data = get_context("category", category_slug)
-        if not category_data:
+        cs = md.get("category_slug", "")
+        cd = get_context("category", cs)
+        if not cd:
             continue
+        cust_id = td.get("customer_id")
+        cust_d = get_context("customer", cust_id) if cust_id else None
+        tasks.append({"tid": tid, "td": td, "mid": mid, "md": md, "cd": cd, "cust_id": cust_id, "cust_d": cust_d})
 
-        customer_id = trigger_data.get("customer_id")
-        customer_data = get_context("customer", customer_id) if customer_id else None
-
-        tasks.append({
-            "trigger_id": trigger_id,
-            "trigger_data": trigger_data,
-            "merchant_id": merchant_id,
-            "merchant_data": merchant_data,
-            "category_data": category_data,
-            "customer_id": customer_id,
-            "customer_data": customer_data,
-        })
-
-    tasks.sort(key=lambda t: t["trigger_data"].get("urgency", 0), reverse=True)
+    tasks.sort(key=lambda t: t["td"].get("urgency", 0), reverse=True)
     tasks = tasks[:8]
 
-    async def process_one(task):
+    async def process(t):
         try:
-            result = await compose_message(
-                task["category_data"], task["merchant_data"],
-                task["trigger_data"], task["customer_data"],
-            )
+            result = await compose_message(t["cd"], t["md"], t["td"], t["cust_d"])
             if not result or not result.get("body"):
                 return None
 
-            trigger_data = task["trigger_data"]
-            is_customer = trigger_data.get("scope") == "customer" and task["customer_id"] is not None
-            send_as = "merchant_on_behalf" if is_customer else "vera"
-            conv_id = f"conv_{task['merchant_id']}_{task['trigger_id']}"
-
-            identity = task["merchant_data"].get("identity", {})
-            owner = identity.get("owner_first_name", identity.get("name", ""))
+            is_cust = t["td"].get("scope") == "customer" and t["cust_id"] is not None
+            conv_id = f"conv_{t['mid']}_{t['tid']}"
+            owner = t["md"].get("identity", {}).get("owner_first_name", t["md"].get("identity", {}).get("name", ""))
 
             action = {
                 "conversation_id": conv_id,
-                "merchant_id": task["merchant_id"],
-                "customer_id": task["customer_id"],
-                "send_as": send_as,
-                "trigger_id": task["trigger_id"],
-                "template_name": f"vera_{trigger_data.get('kind', 'generic')}_v1",
+                "merchant_id": t["mid"],
+                "customer_id": t["cust_id"],
+                "send_as": "merchant_on_behalf" if is_cust else "vera",
+                "trigger_id": t["tid"],
+                "template_name": f"vera_{t['td'].get('kind', 'generic')}_v1",
                 "template_params": [owner, result["body"][:100], ""],
                 "body": result["body"],
                 "cta": result.get("cta", "open_ended"),
-                "suppression_key": trigger_data.get("suppression_key", ""),
-                "rationale": result.get("rationale", "Composed from category+merchant+trigger context"),
+                "suppression_key": t["td"].get("suppression_key", ""),
+                "rationale": result.get("rationale", "Composed from 4-context stack"),
             }
-
-            sent_suppressions.add(trigger_data.get("suppression_key", ""))
+            sent_suppressions.add(t["td"].get("suppression_key", ""))
             conversations[conv_id] = {
                 "turns": [{"from": "vera", "body": result["body"], "turn": 1}],
-                "merchant_id": task["merchant_id"],
-                "trigger_id": task["trigger_id"],
-                "category_slug": task["category_data"].get("slug", ""),
-                "customer_id": task["customer_id"],
-                "auto_reply_count": 0,
+                "merchant_id": t["mid"], "trigger_id": t["tid"],
+                "category_slug": t["cd"].get("slug", ""),
+                "customer_id": t["cust_id"], "auto_reply_count": 0,
             }
             return action
         except Exception as e:
-            print(f"[COMPOSE ERROR] {task['trigger_id']}: {e}")
+            print(f"[ERR] {t['tid']}: {e}")
             return None
 
-    results = await asyncio.gather(*[process_one(t) for t in tasks])
-    actions = [r for r in results if r is not None]
-    return {"actions": actions}
+    results = await asyncio.gather(*[process(t) for t in tasks])
+    return {"actions": [r for r in results if r]}
 
 
 class ReplyBody(BaseModel):
@@ -874,23 +793,11 @@ class ReplyBody(BaseModel):
 @app.post("/v1/reply")
 async def reply(body: ReplyBody):
     if body.conversation_id in ended_conversations:
-        return {
-            "action": "end",
-            "rationale": "Conversation was previously ended. Not re-engaging.",
-        }
+        return {"action": "end", "rationale": "Conversation previously ended."}
 
-    return await handle_reply(
-        conv_id=body.conversation_id,
-        merchant_id=body.merchant_id or "",
-        message=body.message,
-        turn=body.turn_number,
-        customer_id=body.customer_id,
-    )
+    return await handle_reply(body.conversation_id, body.merchant_id or "",
+                              body.message, body.turn_number, body.customer_id)
 
-
-# ============================================================
-# MAIN
-# ============================================================
 
 if __name__ == "__main__":
     import uvicorn
