@@ -158,13 +158,14 @@ async def _gemini(prompt, system, model, max_tokens):
     resp = await http_client.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={LLM_API_KEY}",
         json={"contents": [{"parts": [{"text": full}]}],
-              "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens}},
+              "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens,
+                                   "thinkingConfig": {"thinkingBudget": 0}}},
         headers={"Content-Type": "application/json"})
     resp.raise_for_status()
     data = resp.json()
     parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-    for part in parts:
-        if "text" in part:
+    for part in reversed(parts):
+        if "text" in part and not part.get("thought"):
             return part["text"]
     return ""
 
