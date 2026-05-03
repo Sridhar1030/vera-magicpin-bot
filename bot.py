@@ -687,11 +687,11 @@ async def healthz():
 @app.get("/v1/metadata")
 async def metadata():
     return {
-        "team_name": "Vera Elite",
-        "team_members": ["AI Builder"],
+        "team_name": "master pushers",
+        "team_members": ["Sridhar Pillai"],
         "model": get_model(),
         "approach": "4-context LLM composer (category voice + merchant data + trigger payload + customer state) with trigger-kind dispatch, post-validation, multi-turn state machine for auto-reply/intent/hostile handling",
-        "contact_email": "vera@magicpin.com",
+        "contact_email": "sridharpillai75@gmail.com",
         "version": "2.0.0",
         "submitted_at": datetime.utcnow().isoformat() + "Z",
     }
